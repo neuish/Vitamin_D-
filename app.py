@@ -1,3 +1,4 @@
+%%writefile app.py
 # --- Streamlit Setup & Data Preparation --- #
 import streamlit as st
 import pandas as pd
@@ -8,37 +9,116 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import shap
 from catboost import CatBoostClassifier
+from xgboost import XGBClassifier
+from pytorch_tabnet.tab_model import TabNetClassifier
+import torch
+from sklearn.model_selection import train_test_split, RepeatedStratifiedKFold, cross_validate, GridSearchCV
 from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, precision_score, recall_score, f1_score, roc_curve
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+import warnings
+warnings.filterwarnings("ignore")
 
-# --- Assume these variables are available from the notebook's execution --- #
-# df: original DataFrame with processed features (including supplement_tier, sun_hours_bins, sun_exposure_group, sun_hours_quartile)
-# df_encoded: DataFrame with one-hot encoded and numerical features
-# scaler: StandardScaler object, fitted on x_train[columns_to_scale]
-# cat_model: The trained CatBoostClassifier model
-# explainer_cat: The SHAP TreeExplainer for cat_model
-# x_train, x_test: Scaled feature DataFrames used for training/testing cat_model
-# y_test: Target variable for the test set
-# OPTIMAL_THRESHOLD: The optimal probability threshold
-# cv_df: Cross-validation results DataFrame
-# model_comparison: Model comparison DataFrame
+# --- Data Loading and Preprocessing ---
+# Assuming the CSV is placed in the same directory as app.py for standalone execution
+df = pd.read_csv('Vitamin_D_Dataset.csv')
 
-# Reconstruct x_full for Streamlit input handling (unscaled features for ranges)
-x_full = df_encoded.drop(columns=['deficient', 'supplement_tier', 'sun_hours_bins', 'sun_exposure_group', 'sun_hours_quartile']).copy()
+# Data Cleaning and treating (from notebook cells)
+# Drop rows with any null values (already checked in notebook, but included for robustness)
+df.dropna(inplace=True)
 
-# The trained CatBoost model is the prediction model
-prediction_model = cat_model
+# Rename columns (from Wv6_aSb6KlqV)
+df.columns = [
+    'age',
+    'bmi',
+    'sun_hours_per_day',
+    'screen_time_hours',
+    'calcium_intake_mg',
+    'vitamin_d_supplement_iu',
+    'latitude_deg',
+    'outdoor_activity_minutes',
+    'diet_score',
+    'sleep_hours',
+    'cholesterol_mg_dl',
+    'body_fat_percentage',
+    'serum_calcium_mg_dl',
+    'sex',
+    'skin_tone',
+    'clothing_coverage',
+    'season',
+    'physical_activity_level',
+    'diet_type',
+    'socioeconomic_status',
+    'education_level',
+    'smoking_status',
+    'alcohol_use',
+    'urban_rural',
+    'vitamin_d_ng_ml',
+    'deficient'
+]
 
-# The features used for prediction are all columns in x_train/x_test
-selected_features_for_prediction = x_train.columns
+# Create tiers for vitaminD_supplement_dose_IU for visualizations (from KnSMTJaR7sjw)
+df['supplement_tier'] = pd.cut(df['vitamin_d_supplement_iu'],
+                               bins=[-1, 0, 400, 800, 1500, 2001],
+                               labels=['None (0 IU)', 'Low (1-400 IU)', 'Medium (401-800 IU)', 'High (801-1500 IU)', 'Very High (>1500 IU)'],
+                               right=False)
 
-# For SHAP global plots, the explainer expects scaled data, so x_test_full refers to x_test
-x_train_full = x_train.copy() # x_train is already scaled for continuous features
-x_test_full = x_test.copy()   # x_test is already scaled for continuous features
+# Create bins for sun_hours_per_day (from KnSMTJaR7sjw)
+df['sun_hours_bins'] = pd.cut(df['sun_hours_per_day'], bins=np.arange(0, 8.5, 0.5), right=False)
 
-# The SHAP explainer for CatBoost
-explainer_for_shap = explainer_cat
+# Create sun_exposure_group (from J5-0pCDd8DC3)
+df['sun_exposure_group'] = pd.cut(
+    df['sun_hours_per_day'],
+    bins=[0, 2, 4, 6, 8],
+    labels=[
+        'Low\n(0-2h)',
+        'Moderate\n(2-4h)',
+        'High\n(4-6h)',
+        'Very High\n(6-8h)'
+    ]
+)
 
-# List of continuous columns that were scaled
+# Create quartiles for sun_hours_per_day (from Q10JqJUIjSiE)
+df['sun_hours_quartile'] = pd.qcut(df['sun_hours_per_day'], q=4, labels=['Q1 (Low)', 'Q2', 'Q3', 'Q4 (High)'])
+
+# Drop 'vitamin_d_ng_ml' (from GXUyx7xsVy55)
+df = df.drop('vitamin_d_ng_ml', axis=1)
+
+# Convert 'deficient' to object type for some operations, then back to int (from 6ab3e379, then back to int later)
+df['deficient'] = df['deficient'].astype('object')
+
+# One-hot encode categorical columns (from ffca819f)
+categorical_cols_to_encode = ['sex', 'skin_tone', 'clothing_coverage', 'season', 'physical_activity_level', 'diet_type', 'socioeconomic_status', 'education_level', 'smoking_status', 'alcohol_use', 'urban_rural']
+df_encoded = pd.get_dummies(df, columns=categorical_cols_to_encode, drop_first=True)
+
+# Convert boolean columns to integers (from b8682bbd)
+for col in df_encoded.select_dtypes(include='bool').columns:
+    df_encoded[col] = df_encoded[col].astype(int)
+
+# Grouping Age and VitaminD Supplement IU (from e21reFM3aJOL)
+age_bins = [0, 20, 30, 40, 50, 60, 70, float('inf')]
+age_labels = ['Below 20', '20-29', '30-39', '40-49', '50-59', '60-69', '70+']
+
+delay_bins = [0, 400, 800, 1000, 2000, float('inf')]
+delay_labels = ['0', '400', '800', '1000', '2000+']
+
+df['Age_Group'] = pd.cut(df['age'], bins=age_bins, labels=age_labels, right=False)
+df['VitaminD_Supplement_Group'] = pd.cut(df['vitamin_d_supplement_iu'], bins=delay_bins, labels=delay_labels, right=False)
+
+# One-hot encode 'Age_Group' and 'VitaminD_Supplement_Group' (from 2a0bcc8f)
+df_age_vitd_encoded = pd.get_dummies(df[['Age_Group', 'VitaminD_Supplement_Group']], drop_first=True)
+for col in df_age_vitd_encoded.select_dtypes(include='bool').columns:
+    df_age_vitd_encoded[col] = df_age_vitd_encoded[col].astype(int)
+
+df_encoded = pd.concat([df_encoded, df_age_vitd_encoded], axis=1)
+
+# Drop 'age' and 'vitamin_d_supplement_iu' (from xtqGTowfdnhc)
+df_encoded = df_encoded.drop(columns=['age', 'vitamin_d_supplement_iu'])
+
+# Convert 'deficient' back to int before train-test split (needed for model training)
+df_encoded['deficient'] = df_encoded['deficient'].astype(int)
+
+# --- Train-Test Split & Scaling --- #
 columns_to_scale = [
     'bmi', 'sun_hours_per_day', 'screen_time_hours',
     'calcium_intake_mg', 'latitude_deg', 'outdoor_activity_minutes',
@@ -46,7 +126,86 @@ columns_to_scale = [
     'body_fat_percentage', 'serum_calcium_mg_dl'
 ]
 
-# --- Helper functions (from notebook) ---
+x = df_encoded.drop(columns=['deficient', 'supplement_tier', 'sun_hours_bins', 'sun_exposure_group', 'sun_hours_quartile'])
+y = df_encoded['deficient']
+
+x_train, x_test, y_train, y_test = train_test_split(
+    x, y, train_size=0.7, random_state=100, stratify=y
+)
+
+scaler = StandardScaler()
+x_train[columns_to_scale] = scaler.fit_transform(x_train[columns_to_scale])
+x_test[columns_to_scale]  = scaler.transform(x_test[columns_to_scale])
+
+# Optimal threshold from Logistic Regression analysis (from iQaRjKzOfqbe)
+OPTIMAL_THRESHOLD = 0.4
+
+# --- Model Training ---
+cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=42)
+scoring = ['accuracy', 'roc_auc', 'f1', 'precision', 'recall']
+
+# Logistic Regression (for comparison)
+pipe_lr = Pipeline(
+    [('scaler', StandardScaler()), ('model', LogisticRegression(max_iter=1000, random_state=42))]
+)
+# Fit the LR model for obtaining y_prob_lr (not cross-validated pipeline for direct prediction)
+logreg_model_for_predict = Pipeline([('scaler', StandardScaler()), ('model', LogisticRegression(max_iter=1000, random_state=42))])
+logreg_model_for_predict.fit(x_train, y_train)
+y_prob_lr = logreg_model_for_predict.predict_proba(x_test)[:, 1]
+
+# XGBoost (for comparison)
+pipe_xgb = Pipeline(
+    [('model', XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.1,
+                             subsample=0.8, colsample_bytree=0.8,
+                             random_state=42, eval_metric='logloss'))]
+)
+xgb_model = XGBClassifier(
+    colsample_bytree=0.8, random_state=42, eval_metric='logloss',
+    learning_rate=0.1, max_depth=3, n_estimators=200, subsample=0.8 # Best params from notebook cell lwwMej5Q5nLJ
+)
+xgb_model.fit(x_train, y_train)
+y_prob_xgb = xgb_model.predict_proba(x_test)[:, 1]
+
+# CatBoost (the primary model for the app)
+cat_model = CatBoostClassifier(
+    iterations=300, learning_rate=0.1, depth=6, random_seed=42, verbose=0, eval_metric='AUC'
+)
+cat_model.fit(x_train, y_train, eval_set=(x_test, y_test), early_stopping_rounds=50, use_best_model=True)
+y_prob_cat = cat_model.predict_proba(x_test)[:, 1]
+
+# TabNet (for comparison)
+tabnet_model = TabNetClassifier(
+    n_d=16, n_a=16, n_steps=3, gamma=1.3, n_independent=2, n_shared=2,
+    optimizer_fn=torch.optim.Adam, optimizer_params=dict(lr=1e-2),
+    scheduler_params={"step_size": 30, "gamma": 0.9},
+    scheduler_fn=torch.optim.lr_scheduler.StepLR, mask_type='sparsemax',
+    seed=42, verbose=0
+)
+tabnet_model.fit(
+    X_train=x_train.values, y_train=y_train.values,
+    eval_set=[(x_test.values, y_test.values)],
+    eval_name=['test'], eval_metric=['auc'],
+    max_epochs=50, patience=10, batch_size=256, virtual_batch_size=128
+)
+y_prob_tab = tabnet_model.predict_proba(x_test.values)[:, 1]
+
+# --- Cross-Validation Results (from _FpNxYVSbBZW) ---
+results = {}
+for name, pipe in [('Logistic Regression', pipe_lr),
+                   ('XGBoost', pipe_xgb),
+                   ('CatBoost', cat_model)]:
+    # For CatBoost, if already trained, avoid retraining with cross_validate
+    # Here we'll use a fresh pipeline for cross_validate if pipe is a trained model
+    if isinstance(pipe, CatBoostClassifier):
+        cv_pipe = Pipeline([('model', CatBoostClassifier(iterations=300, learning_rate=0.1, depth=6, random_seed=42, verbose=0))])
+    else:
+        cv_pipe = pipe
+    cv_res = cross_validate(cv_pipe, x, y, cv=cv, scoring=scoring)
+    results[name] = {metric: f"{cv_res[f'test_{metric}'].mean():.3f} \u00b1 {cv_res[f'test_{metric}'].std():.3f}"
+                     for metric in scoring}
+cv_df = pd.DataFrame(results).T
+
+# --- Model Comparison Table (from 02g3447UIqaE) ---
 def get_metrics(y_true, y_pred, y_prob):
     return {
         'Accuracy': accuracy_score(y_true, y_pred),
@@ -56,6 +215,34 @@ def get_metrics(y_true, y_pred, y_prob):
         'ROC-AUC': roc_auc_score(y_true, y_prob)
     }
 
+y_test_pred_lr = (y_prob_lr > OPTIMAL_THRESHOLD).astype(int) # Recompute for consistency with notebook logic
+y_pred_xgb = xgb_model.predict(x_test)
+y_pred_cat = cat_model.predict(x_test)
+y_pred_tab = tabnet_model.predict(x_test.values)
+
+model_comparison = pd.DataFrame([
+    {'Model': 'Logistic Regression', **get_metrics(y_test, y_test_pred_lr, y_prob_lr)},
+    {'Model': 'XGBoost', **get_metrics(y_test, y_pred_xgb, y_prob_xgb)},
+    {'Model': 'CatBoost', **get_metrics(y_test, y_pred_cat, y_prob_cat)},
+    {'Model': 'TabNet', **get_metrics(y_test, y_pred_tab, y_prob_tab)}
+])
+
+# --- y_test_final for LR Evaluation (from 2pvnwRhEgnMm) ---
+y_test_final = pd.DataFrame({'Actual' : y_test.values, 'Predicted_Prob' : y_prob_lr})
+y_test_final['Predicted'] = y_test_final.Predicted_Prob.map(lambda x: 1 if x > OPTIMAL_THRESHOLD else 0)
+
+# --- SHAP Explainer (from ee8e0578) ---
+explainer_cat = shap.TreeExplainer(cat_model)
+
+# --- Global variables for Streamlit App --- #
+x_full = df_encoded.drop(columns=['deficient', 'supplement_tier', 'sun_hours_bins', 'sun_exposure_group', 'sun_hours_quartile']).copy()
+prediction_model = cat_model
+selected_features_for_prediction = x_train.columns
+x_train_full = x_train.copy()
+x_test_full = x_test.copy()
+explainer_for_shap = explainer_cat
+
+# --- Helper function for Decision Curve Analysis (from AHt9OY4No8sY) ---
 def decision_curve(y_true, y_prob, thresholds):
     N = len(y_true)
     net_benefits = []
@@ -66,7 +253,6 @@ def decision_curve(y_true, y_prob, thresholds):
         TP = np.sum((y_pred == 1) & (y_true == 1))
         FP = np.sum((y_pred == 1) & (y_true == 0))
 
-        # Avoid division by zero if (1-pt) is zero or very close to it
         if (1 - pt) == 0:
             net_benefit = (TP / N)
         else:
@@ -75,14 +261,13 @@ def decision_curve(y_true, y_prob, thresholds):
 
     return net_benefits
 
-
 # --- Streamlit App Definition --- #
 def run_streamlit_app():
     st.set_page_config(layout="wide")
 
     st.title("Vitamin D Deficiency Prediction App (CatBoost Model)")
 
-    tab1, tab2, tab3 = st.tabs(["Visualizations", "Model Evaluation", "Interactive Prediction"]) 
+    tab1, tab2, tab3 = st.tabs(["Visualizations", "Model Evaluation", "Interactive Prediction"])
 
     with tab1:
         st.header("Key Visualizations")
@@ -107,6 +292,7 @@ def run_streamlit_app():
         # Visualization 2: Vitamin D Distribution & Deficiency Threshold
         st.subheader('Vitamin D Distribution by Deficiency Status')
         fig2, ax2 = plt.subplots(figsize=(10, 6))
+        # 'vitamin_d_ng_ml' is dropped from df_encoded, but df still has it for visualization
         sns.violinplot(x='deficient', y='vitamin_d_ng_ml', data=df, palette={0: 'teal', 1: 'coral'}, hue='deficient', legend=False, ax=ax2)
         ax2.axhline(20, color='gold', linestyle='--', label='Deficiency Threshold')
         ax2.set_title('Vitamin D Distribution by Deficiency Status', fontsize=16)
@@ -202,29 +388,6 @@ def run_streamlit_app():
 
         st.subheader("ROC Curve Comparison of All Models")
         fig_roc, ax_roc = plt.subplots(figsize=(7, 7))
-        
-        # Prepare y_prob for LR (from y_test_final)
-        y_prob_lr = y_test_final['Predicted_Prob']
-        y_test_pred_lr = (y_prob_lr > OPTIMAL_THRESHOLD).astype(int)
-
-        # XGBoost
-        y_pred_xgb = xgb_model.predict(x_test)
-        y_prob_xgb = xgb_model.predict_proba(x_test)[:, 1]
-
-        # CatBoost
-        y_pred_cat = cat_model.predict(x_test)
-        y_prob_cat = cat_model.predict_proba(x_test)[:, 1]
-
-        # TabNet (re-predict for consistency if model state might have changed)
-        # Note: TabNet model might need to be re-fitted if its state is not persisted or it's a fresh run
-        # For this context, assuming it's available or re-fitted if necessary.
-        # This block is for generating the plot, not for training.
-        try:
-            y_pred_tab = tabnet_model.predict(x_test.values)
-            y_prob_tab = tabnet_model.predict_proba(x_test.values)[:, 1]
-        except NameError: # Handle case where tabnet_model might not be defined if run out of order
-            st.warning("TabNet model not found, skipping its ROC curve.")
-            y_prob_tab = np.array([])
 
         fpr_lr, tpr_lr, _ = roc_curve(y_test, y_prob_lr)
         ax_roc.plot(fpr_lr, tpr_lr, label=f'Logistic Regression (AUC={roc_auc_score(y_test, y_prob_lr):.3f})')
@@ -235,9 +398,8 @@ def run_streamlit_app():
         fpr_cat, tpr_cat, _ = roc_curve(y_test, y_prob_cat)
         ax_roc.plot(fpr_cat, tpr_cat, label=f'CatBoost (AUC={roc_auc_score(y_test, y_prob_cat):.3f})')
 
-        if y_prob_tab.size > 0:
-            fpr_tab, tpr_tab, _ = roc_curve(y_test, y_prob_tab)
-            ax_roc.plot(fpr_tab, tpr_tab, label=f'TabNet (AUC={roc_auc_score(y_test, y_prob_tab):.3f})')
+        fpr_tab, tpr_tab, _ = roc_curve(y_test, y_prob_tab)
+        ax_roc.plot(fpr_tab, tpr_tab, label=f'TabNet (AUC={roc_auc_score(y_test, y_prob_tab):.3f})')
 
         ax_roc.plot([0, 1], [0, 1], 'k--')
         ax_roc.set_xlabel('False Positive Rate')
@@ -259,8 +421,7 @@ def run_streamlit_app():
         nb_lr = decision_curve(y_test, y_prob_lr, thresholds)
         nb_xgb = decision_curve(y_test, y_prob_xgb, thresholds)
         nb_cat = decision_curve(y_test, y_prob_cat, thresholds)
-        # Using CatBoost probabilities for TabNet DCA as well if TabNet probs are not reliably available
-        nb_tab = decision_curve(y_test, y_prob_cat, thresholds) # Assuming y_prob_tab is used from prev cell
+        nb_tab = decision_curve(y_test, y_prob_tab, thresholds) # Use y_prob_tab from above
 
         ax_dca.plot(thresholds, nb_lr, label='LR')
         ax_dca.plot(thresholds, nb_xgb, label='XGBoost')
@@ -287,27 +448,22 @@ def run_streamlit_app():
 
         st.sidebar.header("Input Features")
         for col_name in columns_to_scale:
-            # Ensure min_val, max_val, mean_val are floats for number_input
             min_val = float(x_full[col_name].min())
             max_val = float(x_full[col_name].max())
             mean_val = float(x_full[col_name].mean())
             input_data[col_name] = st.sidebar.number_input(f"Enter {col_name.replace('_', ' ').title()}", min_value=min_val, max_value=max_val, value=mean_val, key=f"num_{col_name}")
 
-        # Categorical features - handle grouped Age and VitaminD Supplement separately to get raw input
         raw_age = st.sidebar.slider("Age", min_value=18, max_value=79, value=48, key="age_slider")
         raw_vitamin_d_supplement_iu = st.sidebar.slider("Vitamin D Supplement (IU)", min_value=0, max_value=2000, value=400, step=100, key="vitd_supp_slider")
 
-        # Map raw age to Age_Group
         age_bins_raw = [0, 20, 30, 40, 50, 60, 70, float('inf')]
         age_labels_raw = ['Below 20', '20-29', '30-39', '40-49', '50-59', '60-69', '70+']
         age_group_raw = pd.cut([raw_age], bins=age_bins_raw, labels=age_labels_raw, right=False)[0]
 
-        # Map raw vitamin D supplement to VitaminD_Supplement_Group
         delay_bins_raw = [0, 400, 800, 1000, 2000, float('inf')]
         delay_labels_raw = ['0', '400', '800', '1000', '2000+']
         vitamin_d_group_raw = pd.cut([raw_vitamin_d_supplement_iu], bins=delay_bins_raw, labels=delay_labels_raw, right=False)[0]
 
-        # Original categorical columns that were one-hot encoded (using the same list from original notebook)
         categorical_cols_original = {
             'sex': ['Female', 'Male'],
             'skin_tone': ['Dark', 'Light', 'Medium'],
@@ -322,64 +478,47 @@ def run_streamlit_app():
             'urban_rural': ['Rural', 'Urban']
         }
 
-        for col, options in categorical_cols_original.items():
-            input_data[col] = st.sidebar.selectbox(f"Select {col.replace('_', ' ').title()}", options, key=f"select_{col}")
+        input_df = pd.DataFrame(0, index=[0], columns=x_full.columns)
 
-        # Create a DataFrame for the single prediction input
-        input_df = pd.DataFrame(0, index=[0], columns=x_full.columns) # Initialize with zeros to handle missing categories
-
-        # Fill continuous columns
         for col_name in columns_to_scale:
             input_df.loc[0, col_name] = input_data[col_name]
 
-        # Fill one-hot encoded columns for original categorical features
         for col, options in categorical_cols_original.items():
-            # Assuming drop_first=True, so the first category becomes the reference (all zeros)
             for option in options:
                 col_name_ohe = f"{col}_{option}"
-                if col_name_ohe in x_full.columns: # Check if this specific OHE column exists in model features
+                if col_name_ohe in x_full.columns:
                     input_df.loc[0, col_name_ohe] = 1 if input_data[col] == option else 0
-                elif input_data[col] == option and option == options[0]: # This is the reference category
-                     # Ensure reference category components are set to 0 where applicable
-                    pass # No column to set to 1 for the reference category
+                elif input_data[col] == option and option == options[0]:
+                    pass
 
-        # Fill one-hot encoded columns for Age_Group
-        age_labels_present = [label for label in age_labels_raw if f"Age_Group_{label}" in x_full.columns]
         for label in age_labels_raw:
-            if label != age_labels_raw[0]: # drop_first=True equivalent, ensuring 'Below 20' is the reference
+            if label != age_labels_raw[0]:
                 col_name_ohe = f"Age_Group_{label}"
-                if col_name_ohe in x_full.columns: # Check if this specific OHE column exists in model features
+                if col_name_ohe in x_full.columns:
                     input_df.loc[0, col_name_ohe] = 1 if age_group_raw == label else 0
-            elif age_group_raw == label and label == age_labels_raw[0]: # Reference category
-                pass # No column to set to 1 for the reference category
+            elif age_group_raw == label and label == age_labels_raw[0]:
+                pass
 
-        # Fill one-hot encoded columns for VitaminD_Supplement_Group
-        vitd_labels_present = [label for label in delay_labels_raw if f"VitaminD_Supplement_Group_{label}" in x_full.columns]
         for label in delay_labels_raw:
-            if label != delay_labels_raw[0]: # drop_first=True equivalent, ensuring '0' is the reference
+            if label != delay_labels_raw[0]:
                 col_name_ohe = f"VitaminD_Supplement_Group_{label}"
-                if col_name_ohe in x_full.columns: # Check if this specific OHE column exists in model features
+                if col_name_ohe in x_full.columns:
                     input_df.loc[0, col_name_ohe] = 1 if vitamin_d_group_raw == label else 0
-            elif vitamin_d_group_raw == label and label == delay_labels_raw[0]: # Reference category
-                pass # No column to set to 1 for the reference category
+            elif vitamin_d_group_raw == label and label == delay_labels_raw[0]:
+                pass
 
-        # Reorder columns to match x_full exactly
-        input_df = input_df[x_full.columns] 
+        input_df = input_df[x_full.columns]
 
-        # Convert all boolean columns to int in the input_df if any were created during OHE (ensure consistency)
         for col_name in input_df.select_dtypes(include='bool').columns:
             input_df[col_name] = input_df[col_name].astype(int)
 
-        # Scale continuous features in the input DataFrame using the global scaler
         input_df_scaled = input_df.copy()
         input_df_scaled[columns_to_scale] = scaler.transform(input_df_scaled[columns_to_scale])
 
-        # Select only the features the model was trained on
         input_df_for_prediction = input_df_scaled[selected_features_for_prediction]
 
         st.subheader("Prediction Result (CatBoost)")
         if st.button("Predict Vitamin D Deficiency"):
-            # Make prediction using CatBoost model
             prediction_prob = prediction_model.predict_proba(input_df_for_prediction.values)[0, 1]
             prediction_label = prediction_model.predict(input_df_for_prediction.values)[0]
 
@@ -391,14 +530,11 @@ def run_streamlit_app():
             st.subheader("Feature Explanations (SHAP for CatBoost)")
             st.write("How each feature contributes to this specific prediction:")
 
-            # Compute SHAP values for the single input
-            # explainer_for_shap was created using TreeExplainer, so shap_values is a list of arrays for multi-output
-            shap_values_cat_individual = explainer_for_shap.shap_values(input_df_for_prediction.values)[0] # Assuming binary classification, take the shap values for class 1
+            shap_values_cat_individual = explainer_for_shap.shap_values(input_df_for_prediction.values)[0]
 
-            # Visualize with force plot
             st.write("**Individual Prediction Explanation (Force Plot):**")
             fig_force = shap.force_plot(
-                explainer_for_shap.expected_value[0], # For binary, take expected value for class 1
+                explainer_for_shap.expected_value[0],
                 shap_values_cat_individual,
                 input_df_for_prediction.iloc[0],
                 matplotlib=True,
@@ -410,7 +546,6 @@ def run_streamlit_app():
             st.write("--- ")
             st.write("**Global Feature Importance (SHAP Summary Plot - Bar):**")
             fig_bar, ax_bar = plt.subplots(figsize=(10, 6))
-            # Use x_test_full (scaled test set) for global SHAP plots
             shap.summary_plot(explainer_for_shap.shap_values(x_test_full.values), x_test_full, plot_type='bar', max_display=15, show=False)
             st.pyplot(fig_bar, bbox_inches='tight')
             plt.close(fig_bar)
@@ -418,11 +553,9 @@ def run_streamlit_app():
             st.write("--- ")
             st.write("**Global Feature Impact (SHAP Summary Plot - Beeswarm):**")
             fig_beeswarm, ax_beeswarm = plt.subplots(figsize=(10, 6))
-            # Use x_test_full (scaled test set) for global SHAP plots
             shap.summary_plot(explainer_for_shap.shap_values(x_test_full.values), x_test_full, max_display=15, show=False)
             st.pyplot(fig_beeswarm, bbox_inches='tight')
             plt.close(fig_beeswarm)
 
-# To run this in a local environment, save the content of this cell as a .py file (e.g., app.py) and then run `streamlit run app.py`
-# Uncomment the line below if you are running in a specialized Colab environment that supports direct Streamlit rendering.
-# run_streamlit_app()
+# Call the Streamlit app function
+run_streamlit_app()
