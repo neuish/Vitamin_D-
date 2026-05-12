@@ -1,6 +1,3 @@
-import sys
-!{sys.executable} -m pip install streamlit
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -373,10 +370,10 @@ with dashboard_tab:
         ax.set_title('Median Vitamin D (ng/mL) by Supplementation Tier and Sun Hours Quartile', fontsize=14)
         ax.set_xlabel('Sun Hours Per Day Quartile', fontsize=12)
         ax.set_ylabel('Vitamin D Supplementation Tier', fontsize=12)
-        plt.xticks(rotation=45, ha='right')
-        plt.yticks(rotation=0)
-        plt.tight_layout()
-        st.pyplot(fig)
+            plt.xticks(rotation=45, ha='right')
+            plt.yticks(rotation=0)
+            plt.tight_layout()
+            st.pyplot(fig)
 
         # Correlation Heatmap for encoded features
         st.subheader("Correlation Heatmap of Encoded Features")
