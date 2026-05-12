@@ -145,51 +145,98 @@ with tab_eval:
 
 with tab_clinical:
     st.header("Patient Diagnostic & Interpretability Tool")
-    cin, cout = st.columns([1, 2])
-    with cin:
-        st.info("Enter Patient Data")
-        i_bmi = st.number_input("BMI", 15.0, 50.0, 24.5)
+    
+    # 1. Feature Input Section in 2 Columns
+    st.info("Step 1: Enter Patient Clinical Features")
+    col1, col2 = st.columns(2)
+    
+    with col1:
         i_sun = st.slider("Sun Exposure (Hrs/Day)", 0.0, 8.0, 2.5)
-        i_cal = st.number_input("Serum Calcium (mg/dl)", 8.0, 11.0, 9.4)
-        i_cho = st.number_input("Cholesterol (mg/dl)", 100, 350, 190)
-        i_fat = st.slider("Body Fat %", 5, 50, 25)
-        i_age = st.slider("Age", 18, 90, 45)
+        i_season = st.selectbox("Current Season", ["Winter", "Spring", "Summer", "Monsoon"])
+        i_bmi = st.number_input("BMI", 15.0, 50.0, 24.5)
+        i_age = st.slider("Age", 1, 100, 45)
+        i_supp = st.number_input("Vitamin D Supplement (IU)", 0, 10000, 400)
+
+    with col2:
         i_skin = st.selectbox("Skin Tone", ["Light", "Medium", "Dark"])
-        i_sea = st.selectbox("Season", ["Winter", "Spring", "Summer", "Monsoon"])
-        i_supp = st.number_input("Vitamin D Supplement (IU)", 0, 5000, 400)
-        i_scr = st.slider("Screen Time (Hrs)", 0, 15, 5)
-        i_diet = st.slider("Diet Score", 1, 10, 5)
-        i_sleep = st.slider("Sleep (Hrs)", 4, 12, 7)
-        predict_btn = st.button("Run Prediction", type="primary")
-    with cout:
-        if predict_btn:
-            # FIX: Use 0.0 to initialize as float DataFrame
-            input_row = pd.DataFrame(0.0, index=[0], columns=X.columns)
-            input_row.at[0, 'bmi'] = float(i_bmi)
-            input_row.at[0, 'sun_hours_per_day'] = float(i_sun)
-            input_row.at[0, 'serum_calcium_mg_dl'] = float(i_cal)
-            input_row.at[0, 'cholesterol_mg_dl'] = float(i_cho)
-            input_row.at[0, 'body_fat_percentage'] = float(i_fat)
-            input_row.at[0, 'screen_time_hours'] = float(i_scr)
-            input_row.at[0, 'diet_score'] = float(i_diet)
-            input_row.at[0, 'sleep_hours'] = float(i_sleep)
-            if f'skin_tone_{i_skin}' in X.columns: input_row.at[0, f'skin_tone_{i_skin}'] = 1.0
-            if f'season_{i_sea}' in X.columns: input_row.at[0, f'season_{i_sea}'] = 1.0
-            
-            in_sc = input_row.copy()
-            in_sc[NUM_COLS] = scaler.transform(input_row[NUM_COLS])
-            prob = cat_m.predict_proba(in_sc)[0,1]
-            st.metric("Risk Probability", f"{prob*100:.1f}%")
-            if prob > 0.4: st.error("DIAGNOSIS: DEFICIENT")
-            else: st.success("DIAGNOSIS: NORMAL")
-            st.divider()
-            st.subheader("SHAP Interpretability (CatBoost)")
-            explainer = shap.TreeExplainer(cat_m)
-            shap_values = explainer.shap_values(x_test_sc)
-            c_sh1, c_sh2 = st.columns(2)
-            with c_sh1:
-                st.write("**Feature Importance (Magnitude)**")
-                fig1, ax1 = plt.subplots(); shap.summary_plot(shap_values, x_test_sc, plot_type='bar', show=False); st.pyplot(fig1); plt.close()
-            with c_sh2:
-                st.write("**Feature Impact (Directionality)**")
-                fig2, ax2 = plt.subplots(); shap.summary_plot(shap_values, x_test_sc, show=False); st.pyplot(fig2); plt.close()
+        i_lat = st.number_input("Latitude (Degrees)", 0.0, 70.0, 34.0)
+        i_act = st.selectbox("Physical Activity Level", ["Sedentary", "Low", "Moderate", "High"])
+        i_diet = st.slider("Diet Quality Score (1-10)", 1, 10, 5)
+        i_sleep = st.slider("Average Sleep (Hrs)", 4, 12, 7)
+
+    # Center-aligned Prediction Button
+    predict_btn = st.button("Run Diagnostic Analysis", type="primary", use_container_width=True)
+    
+    st.divider()
+
+    # 2. Prediction Results & SHAP Grid
+    if predict_btn:
+        # Prepare input row (matching your binned ML columns)
+        input_row = pd.DataFrame(0.0, index=[0], columns=X.columns)
+        
+        # Numeric Mappings
+        input_row.at[0, 'bmi'] = float(i_bmi)
+        input_row.at[0, 'sun_hours_per_day'] = float(i_sun)
+        input_row.at[0, 'latitude_deg'] = float(i_lat)
+        input_row.at[0, 'diet_score'] = float(i_diet)
+        input_row.at[0, 'sleep_hours'] = float(i_sleep)
+        
+        # Categorical Mappings (Season, Skin Tone, Activity)
+        if f'season_{i_season}' in X.columns: input_row.at[0, f'season_{i_season}'] = 1.0
+        if f'skin_tone_{i_skin}' in X.columns: input_row.at[0, f'skin_tone_{i_skin}'] = 1.0
+        if f'physical_activity_level_{i_act}' in X.columns: input_row.at[0, f'physical_activity_level_{i_act}'] = 1.0
+        
+        # Map Age Slider to the Bins used in Training
+        age_bin = pd.cut([i_age], bins=[0, 20, 30, 40, 50, 60, 70, 120], labels=['<20', '20s', '30s', '40s', '50s', '60s', '70+'])[0]
+        if f'Age_Group_{age_bin}' in X.columns: input_row.at[0, f'Age_Group_{age_bin}'] = 1.0
+        
+        # Map Supplement Input to the Bins used in Training
+        supp_bin = pd.cut([i_supp], bins=[-1, 400, 800, 1000, 2000, 20000], labels=['0', '400', '800', '1000', '2000+'])[0]
+        if f'Supp_Group_{supp_bin}' in X.columns: input_row.at[0, f'Supp_Group_{supp_bin}'] = 1.0
+
+        # Scale numerical inputs
+        in_sc = input_row.copy()
+        in_sc[NUM_COLS] = scaler.transform(input_row[NUM_COLS])
+        
+        # Perform Prediction
+        prob = cat_m.predict_proba(in_sc)[0,1]
+        
+        # Results Header
+        res_col1, res_col2 = st.columns(2)
+        with res_col1:
+            st.metric("Risk Probability", f"{prob*100:.2f}%")
+        with res_col2:
+            if prob > 0.45:
+                st.error("DIAGNOSIS: HIGH RISK OF DEFICIENCY")
+            else:
+                st.success("DIAGNOSIS: LOW RISK / NORMAL")
+
+        st.divider()
+        
+        # SHAP GRID Section
+        st.subheader("Model Interpretability (SHAP Value Grid)")
+        explainer = shap.TreeExplainer(cat_m)
+        
+        # We calculate local SHAP values for the current patient prediction
+        shap_values_local = explainer.shap_values(in_sc)
+        
+        grid1, grid2 = st.columns(2)
+        
+        with grid1:
+            st.write("**Patient-Specific Impact**")
+            # Local bar plot showing why this patient got this specific score
+            fig_l, ax_l = plt.subplots()
+            shap.plots.bar(shap.Explanation(values=shap_values_local[0], 
+                                            data=input_row.iloc[0], 
+                                            feature_names=X.columns), show=False)
+            st.pyplot(fig_l)
+            plt.close()
+
+        with grid2:
+            st.write("**Global Model Logic**")
+            # Summary plot showing feature importance across the entire test set
+            fig_g, ax_g = plt.subplots()
+            shap_values_global = explainer.shap_values(x_test_sc)
+            shap.summary_plot(shap_values_global, x_test_sc, plot_type='bar', show=False)
+            st.pyplot(fig_g)
+            plt.close()
