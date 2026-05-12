@@ -163,17 +163,19 @@ with tab_clinical:
         predict_btn = st.button("Run Prediction", type="primary")
     with cout:
         if predict_btn:
-            input_row = pd.DataFrame(0, index=[0], columns=X.columns)
-            input_row.at[0, 'bmi'] = i_bmi
-            input_row.at[0, 'sun_hours_per_day'] = i_sun
-            input_row.at[0, 'serum_calcium_mg_dl'] = i_cal
-            input_row.at[0, 'cholesterol_mg_dl'] = i_cho
-            input_row.at[0, 'body_fat_percentage'] = i_fat
-            input_row.at[0, 'screen_time_hours'] = i_scr
-            input_row.at[0, 'diet_score'] = i_diet
-            input_row.at[0, 'sleep_hours'] = i_sleep
-            if f'skin_tone_{i_skin}' in X.columns: input_row.at[0, f'skin_tone_{i_skin}'] = 1
-            if f'season_{i_sea}' in X.columns: input_row.at[0, f'season_{i_sea}'] = 1
+            # FIX: Use 0.0 to initialize as float DataFrame
+            input_row = pd.DataFrame(0.0, index=[0], columns=X.columns)
+            input_row.at[0, 'bmi'] = float(i_bmi)
+            input_row.at[0, 'sun_hours_per_day'] = float(i_sun)
+            input_row.at[0, 'serum_calcium_mg_dl'] = float(i_cal)
+            input_row.at[0, 'cholesterol_mg_dl'] = float(i_cho)
+            input_row.at[0, 'body_fat_percentage'] = float(i_fat)
+            input_row.at[0, 'screen_time_hours'] = float(i_scr)
+            input_row.at[0, 'diet_score'] = float(i_diet)
+            input_row.at[0, 'sleep_hours'] = float(i_sleep)
+            if f'skin_tone_{i_skin}' in X.columns: input_row.at[0, f'skin_tone_{i_skin}'] = 1.0
+            if f'season_{i_sea}' in X.columns: input_row.at[0, f'season_{i_sea}'] = 1.0
+            
             in_sc = input_row.copy()
             in_sc[NUM_COLS] = scaler.transform(input_row[NUM_COLS])
             prob = cat_m.predict_proba(in_sc)[0,1]
