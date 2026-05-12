@@ -132,7 +132,12 @@ with tab_eval:
         nb_cat = decision_curve(y_test, y_prob_cat, thresholds)
         nb_tab = decision_curve(y_test, y_prob_tab, thresholds)
         prevalence = np.mean(y_test)
-        treat_all = [prevalence - (1 - prevalence) * (pt / (1 - pt)) for pt in thresholds]
+
+ # Calculate treat_all with robustness for pt=1
+        treat_all = np.array([
+            prevalence - (1 - prevalence) * (p / (1 - p)) if p < 1 else prevalence
+            for p in thresholds
+        ])
         treat_none = [0 for _ in thresholds]
         fig, ax = plt.subplots(figsize=(8,6))
         ax.plot(thresholds, nb_lr, label='LR')
@@ -142,6 +147,7 @@ with tab_eval:
         ax.plot(thresholds, treat_all, linestyle='--', label='Treat All', color='red')
         ax.plot(thresholds, treat_none, linestyle='--', label='Treat None', color='black')
         ax.set_ylim(-0.05, 0.4); ax.set_xlabel("Threshold Probability"); ax.set_ylabel("Net Benefit"); ax.legend(); ax.grid(); st.pyplot(fig); plt.close()
+        
 
 # --- Clinical Tab with 2-Column Inputs & SHAP Grid ---
 with tab_clinical:
