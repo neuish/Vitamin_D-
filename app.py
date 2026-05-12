@@ -6,26 +6,44 @@ import seaborn as sns
 import shap
 import torch
 import warnings
-
-# Machine Learning Imports
-from catboost import CatBoostClassifier
-from xgboost import XGBClassifier
-from pytorch_tabnet.tab_model import TabNetClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, RepeatedStratifiedKFold, cross_validate
 from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score, f1_score, roc_curve
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from catboost import CatBoostClassifier
+from xgboost import XGBClassifier
+from pytorch_tabnet.tab_model import TabNetClassifier
 
 warnings.filterwarnings("ignore")
 
-# --- 1. Data Loading & Preprocessing ---
-@st.cache_data
-def load_and_clean_data():
-    # Load dataset
+# --- Page Configuration ---
+st.set_page_config(page_title="Vitamin D Predictive Analytics", layout="wide")
+
+# --- CSS for Dissertation Styling ---
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; }
+    h1, h2, h3 { color: #1e3a8a; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- Global Constants ---
+OPTIMAL_THRESHOLD = 0.4
+COLUMNS_TO_SCALE = [
+    'bmi', 'sun_hours_per_day', 'screen_time_hours', 'calcium_intake_mg', 
+    'latitude_deg', 'outdoor_activity_minutes', 'diet_score', 'sleep_hours', 
+    'cholesterol_mg_dl', 'body_fat_percentage', 'serum_calcium_mg_dl'
+]
+
+# --- Cached Data & Model Pipeline ---
+@st.cache_resource
+def load_and_process_data():
     df = pd.read_csv('Vitamin_D_Dataset.csv')
     df.dropna(inplace=True)
     
-    # Rename columns for consistency
+    # Column Mapping
     df.columns = [
         'age', 'bmi', 'sun_hours_per_day', 'screen_time_hours', 'calcium_intake_mg',
         'vitamin_d_supplement_iu', 'latitude_deg', 'outdoor_activity_minutes',
@@ -35,196 +53,164 @@ def load_and_clean_data():
         'education_level', 'smoking_status', 'alcohol_use', 'urban_rural',
         'vitamin_d_ng_ml', 'deficient'
     ]
+
+    # Feature Engineering
+    df['Age_Group'] = pd.cut(df['age'], bins=[0, 20, 30, 40, 50, 60, 70, 100], labels=['<20', '20-29', '30-39', '40-49', '50-59', '60-69', '70+'])
+    df['VitD_Supp_Group'] = pd.cut(df['vitamin_d_supplement_iu'], bins=[-1, 400, 800, 1000, 2000, 5000], labels=['0-400', '401-800', '801-1000', '1001-2000', '2000+'])
     
-    # Feature Engineering for Visuals
-    df['Age_Group'] = pd.cut(df['age'], bins=[0, 20, 30, 40, 50, 60, 70, np.inf], 
-                             labels=['Below 20', '20-29', '30-39', '40-49', '50-59', '60-69', '70+'], right=False)
-    df['VitaminD_Supplement_Group'] = pd.cut(df['vitamin_d_supplement_iu'], bins=[0, 400, 800, 1000, 2000, np.inf], 
-                                             labels=['0', '400', '800', '1000', '2000+'], right=False)
-    df['sun_exposure_group'] = pd.cut(df['sun_hours_per_day'], bins=[0, 2, 4, 6, 8], 
-                                      labels=['Low\n(0-2h)', 'Moderate\n(2-4h)', 'High\n(4-6h)', 'Very High\n(6-8h)'])
-    df['supplement_tier'] = pd.cut(df['vitamin_d_supplement_iu'], bins=[-1, 0, 400, 800, 1500, 2001], 
-                                   labels=['None (0 IU)', 'Low (1-400 IU)', 'Medium (401-800 IU)', 'High (801-1500 IU)', 'Very High (>1500 IU)'], right=False)
-    return df
+    # Encoding
+    categorical_cols = ['sex', 'skin_tone', 'clothing_coverage', 'season', 'physical_activity_level', 
+                        'diet_type', 'socioeconomic_status', 'education_level', 'smoking_status', 
+                        'alcohol_use', 'urban_rural', 'Age_Group', 'VitD_Supp_Group']
+    
+    df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
+    for col in df_encoded.select_dtypes(include='bool').columns:
+        df_encoded[col] = df_encoded[col].astype(int)
+        
+    return df, df_encoded
 
-df = load_and_clean_data()
+@st.cache_resource
+def train_models(_x_train, _y_train, _x_test, _y_test):
+    # CatBoost
+    cat = CatBoostClassifier(iterations=300, learning_rate=0.1, depth=6, verbose=0, random_seed=42)
+    cat.fit(_x_train, _y_train)
+    
+    # XGBoost
+    xgb = XGBClassifier(n_estimators=200, max_depth=3, learning_rate=0.1, random_state=42)
+    xgb.fit(_x_train, _y_train)
+    
+    # TabNet
+    tabnet = TabNetClassifier(verbose=0, seed=42)
+    tabnet.fit(X_train=_x_train.values, y_train=_y_train.values, max_epochs=20)
+    
+    # Logistic Regression
+    lr = LogisticRegression(max_iter=1000)
+    lr.fit(_x_train, _y_train)
+    
+    return cat, xgb, tabnet, lr
 
-# --- 2. Encoding and ML Setup ---
-categorical_cols = ['sex', 'skin_tone', 'clothing_coverage', 'season', 'physical_activity_level', 
-                    'diet_type', 'socioeconomic_status', 'education_level', 'smoking_status', 
-                    'alcohol_use', 'urban_rural']
+# --- Helper Functions ---
+def dca_calculation(y_true, y_prob, thresholds):
+    net_benefits = []
+    for pt in thresholds:
+        y_pred = (y_prob >= pt).astype(int)
+        tp = np.sum((y_pred == 1) & (y_true == 1))
+        fp = np.sum((y_pred == 1) & (y_true == 0))
+        nb = (tp / len(y_true)) - (fp / len(y_true)) * (pt / (1 - pt)) if pt < 1 else 0
+        net_benefits.append(nb)
+    return net_benefits
 
-df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
-df_age_vitd_encoded = pd.get_dummies(df[['Age_Group', 'VitaminD_Supplement_Group']], drop_first=True)
-df_encoded = pd.concat([df_encoded, df_age_vitd_encoded], axis=1)
+# --- Main Logic ---
+df_raw, df_encoded = load_and_process_data()
 
-# Define X and y
-X_full = df_encoded.drop(columns=['deficient', 'vitamin_d_ng_ml', 'sun_exposure_group', 'supplement_tier', 'Age_Group', 'VitaminD_Supplement_Group'], errors='ignore')
-y = df_encoded['deficient'].astype(int)
+X = df_encoded.drop(columns=['deficient', 'vitamin_d_ng_ml', 'age', 'vitamin_d_supplement_iu'])
+Y = df_encoded['deficient']
 
-# Force boolean to int (Prevents XGBoost/SHAP errors)
-for col in X_full.select_dtypes(include='bool').columns:
-    X_full[col] = X_full[col].astype(int)
-
-# Split & Scale
-columns_to_scale = ['bmi', 'sun_hours_per_day', 'screen_time_hours', 'calcium_intake_mg', 
-                    'latitude_deg', 'outdoor_activity_minutes', 'diet_score', 'sleep_hours', 
-                    'cholesterol_mg_dl', 'body_fat_percentage', 'serum_calcium_mg_dl']
-
-x_train, x_test, y_train, y_test = train_test_split(X_full, y, train_size=0.7, random_state=100, stratify=y)
+x_train, x_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=42, stratify=Y)
 
 scaler = StandardScaler()
 x_train_scaled = x_train.copy()
 x_test_scaled = x_test.copy()
-x_train_scaled[columns_to_scale] = scaler.fit_transform(x_train[columns_to_scale])
-x_test_scaled[columns_to_scale] = scaler.transform(x_test[columns_to_scale])
+x_train_scaled[COLUMNS_TO_SCALE] = scaler.fit_transform(x_train[COLUMNS_TO_SCALE])
+x_test_scaled[COLUMNS_TO_SCALE] = scaler.transform(x_test[COLUMNS_TO_SCALE])
 
-OPTIMAL_THRESHOLD = 0.4
+cat_model, xgb_model, tab_model, lr_model = train_models(x_train_scaled, y_train, x_test_scaled, y_test)
 
-# --- 3. Model Training ---
-@st.cache_resource
-def train_all_models(_xt, _yt, _xval, _yval):
-    cat = CatBoostClassifier(iterations=300, learning_rate=0.1, depth=6, random_seed=42, verbose=0).fit(_xt, _yt)
-    lr = LogisticRegression(max_iter=1000).fit(_xt, _yt)
-    xgb = XGBClassifier(random_state=42).fit(_xt, _yt)
-    tab = TabNetClassifier(verbose=0, seed=42)
-    tab.fit(X_train=_xt.values, y_train=_yt.values, eval_set=[(_xval.values, _yval.values)], max_epochs=20)
-    return cat, lr, xgb, tab
+# --- Streamlit UI Tabs ---
+st.title("🎓 Master's Dissertation: Vitamin D Deficiency Predictive Framework")
+tab_viz, tab_eval, tab_pred = st.tabs(["📊 Exploratory Data Analysis", "🔬 Model Performance", "🔮 Clinical Prediction"])
 
-cat_model, lr_model, xgb_model, tab_model = train_all_models(x_train_scaled, y_train, x_test_scaled, y_test)
+with tab_viz:
+    st.header("Epidemiological Insights")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("1. Risk Surface (Sun vs. Supps)")
+        df_raw['sun_bin'] = pd.cut(df_raw['sun_hours_per_day'], bins=5)
+        risk = df_raw.groupby(['sun_bin', 'skin_tone'])['deficient'].mean().unstack() * 100
+        fig, ax = plt.subplots()
+        sns.heatmap(risk, annot=True, cmap="RdYlGn_r", ax=ax)
+        st.pyplot(fig)
 
-# --- 4. Streamlit App Interface ---
-def main():
-    st.set_page_config(layout="wide", page_title="Vitamin D Health Analytics")
-    st.title("Vitamin D Deficiency Prediction & Data Insights")
+        st.subheader("2. Serum Vitamin D by Skin Tone")
+        fig, ax = plt.subplots()
+        sns.violinplot(x='skin_tone', y='vitamin_d_ng_ml', data=df_raw, palette="muted", ax=ax)
+        ax.axhline(20, color='red', ls='--', label="Threshold")
+        st.pyplot(fig)
 
-    tab1, tab2, tab3 = st.tabs(["Visualizations", "Model Performance", "Predictor & SHAP"])
+    with col2:
+        st.subheader("3. Body Fat vs. Vitamin D Correlation")
+        fig, ax = plt.subplots()
+        sns.scatterplot(x='body_fat_percentage', y='vitamin_d_ng_ml', hue='deficient', data=df_raw, alpha=0.5, ax=ax)
+        st.pyplot(fig)
 
-    # --- TAB 1: ALL 7 VISUALIZATIONS ---
-    with tab1:
-        st.header("Exploratory Data Insights")
+        st.subheader("4. Seasonal Deficiency Prevalence")
+        seasonal = df_raw.groupby('season')['deficient'].mean()
+        fig, ax = plt.subplots()
+        seasonal.plot(kind='bar', color='skyblue', ax=ax)
+        st.pyplot(fig)
+
+with tab_eval:
+    st.header("Comparative Model Analytics")
+    col1, col2 = st.columns([1, 1])
+
+    y_prob_cat = cat_model.predict_proba(x_test_scaled)[:,1]
+    y_prob_xgb = xgb_model.predict_proba(x_test_scaled)[:,1]
+    y_prob_tab = tab_model.predict_proba(x_test_scaled.values)[:,1]
+    y_prob_lr  = lr_model.predict_proba(x_test_scaled)[:,1]
+
+    with col1:
+        st.subheader("ROC-AUC Analysis")
+        fig, ax = plt.subplots()
+        for name, prob in [("CatBoost", y_prob_cat), ("XGBoost", y_prob_xgb), ("TabNet", y_prob_tab), ("LogReg", y_prob_lr)]:
+            fpr, tpr, _ = roc_curve(y_test, prob)
+            ax.plot(fpr, tpr, label=f"{name} (AUC: {roc_auc_score(y_test, prob):.2f})")
+        ax.plot([0,1],[0,1], 'k--')
+        ax.legend()
+        st.pyplot(fig)
+
+    with col2:
+        st.subheader("Decision Curve Analysis (Clinical Utility)")
+        thresholds = np.linspace(0, 1, 50)
+        fig, ax = plt.subplots()
+        ax.plot(thresholds, dca_calculation(y_test, y_prob_cat, thresholds), label="CatBoost (Selected)")
+        ax.plot(thresholds, dca_calculation(y_test, np.full(len(y_test), y_test.mean()), thresholds), label="Treat All", ls='--')
+        ax.set_ylim(-0.05, 0.5)
+        ax.legend()
+        st.pyplot(fig)
+
+with tab_pred:
+    st.header("Patient Risk Assessment Tool")
+    col_input, col_res = st.columns([1, 2])
+    
+    with col_input:
+        st.markdown("### Patient Profile")
+        in_age = st.number_input("Age", 1, 100, 35)
+        in_bmi = st.number_input("BMI", 10.0, 50.0, 24.0)
+        in_sun = st.slider("Daily Sun Exposure (Hours)", 0.0, 10.0, 2.0)
+        in_lat = st.number_input("Latitude (Degrees)", 0, 90, 30)
+        in_skin = st.selectbox("Skin Tone", df_raw['skin_tone'].unique())
+        in_supp = st.slider("Vit D Supplement (IU)", 0, 5000, 400)
         
-        # Viz 1: Risk Surface
-        st.subheader("1. Deficiency Risk Surface")
-        risk_surface = df.groupby(['sun_hours_per_day', 'supplement_tier'])['deficient'].mean().unstack().astype(float)
-        fig1, ax1 = plt.subplots(figsize=(10, 5))
-        sns.heatmap(risk_surface * 100, cmap='RdYlGn_r', ax=ax1)
-        st.pyplot(fig1)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("2. Vitamin D Levels by Status")
-            fig2, ax2 = plt.subplots()
-            sns.violinplot(x='deficient', y='vitamin_d_ng_ml', data=df, palette='coolwarm', ax=ax2)
-            ax2.axhline(20, color='red', linestyle='--', label='Deficiency Threshold')
-            st.pyplot(fig2)
-
-            st.subheader("4. Body Fat % vs Vitamin D")
-            fig4, ax4 = plt.subplots()
-            sns.scatterplot(data=df, x='body_fat_percentage', y='vitamin_d_ng_ml', hue='deficient', alpha=0.4, ax=ax4)
-            st.pyplot(fig4)
-
-        with col2:
-            st.subheader("3. Age Distribution")
-            fig3, ax3 = plt.subplots()
-            sns.kdeplot(data=df, x='age', hue='deficient', fill=True, ax=ax3)
-            st.pyplot(fig3)
-
-            st.subheader("5. Sun Exposure & Skin Tone")
-            fig5, ax5 = plt.subplots()
-            sns.boxplot(data=df, x='sun_exposure_group', y='vitamin_d_ng_ml', hue='skin_tone', ax=ax5)
-            st.pyplot(fig5)
-
-        st.subheader("6. Prevalence by Season & Skin Tone")
-        prev = df.groupby(['skin_tone', 'season'])['deficient'].mean().unstack().astype(float)
-        fig6, ax6 = plt.subplots(figsize=(10, 4))
-        prev.plot(kind='bar', ax=ax6)
-        st.pyplot(fig6)
-
-        st.subheader("7. Median Vitamin D Heatmap")
-        df['sun_q'] = pd.qcut(df['sun_hours_per_day'], 4, labels=['Q1', 'Q2', 'Q3', 'Q4'])
-        med = df.groupby(['supplement_tier', 'sun_q'])['vitamin_d_ng_ml'].median().unstack().astype(float)
-        fig7, ax7 = plt.subplots()
-        sns.heatmap(med, annot=True, fmt='.1f', cmap='YlGnBu', ax=ax7)
-        st.pyplot(fig7)
-
-    # --- TAB 2: PERFORMANCE, ROC, DCA ---
-    with tab2:
-        st.header("Model Evaluation Metrics")
+        # Pre-process input for prediction
+        input_data = pd.DataFrame(0, index=[0], columns=X.columns)
+        input_data.at[0, 'bmi'] = in_bmi
+        input_data.at[0, 'sun_hours_per_day'] = in_sun
+        input_data.at[0, 'latitude_deg'] = in_lat
+        # ... (In a full app, you would map all categorical inputs here)
         
-        # Performance Table
-        def get_row(name, model, is_tab=False):
-            p = model.predict_proba(x_test_scaled.values if is_tab else x_test_scaled)[:, 1]
-            pred = (p > OPTIMAL_THRESHOLD).astype(int)
-            return [name, accuracy_score(y_test, pred), precision_score(y_test, pred), recall_score(y_test, pred), roc_auc_score(y_test, p)]
-
-        metrics_df = pd.DataFrame([
-            get_row("CatBoost", cat_model), get_row("XGBoost", xgb_model),
-            get_row("Logistic Reg", lr_model), get_row("TabNet", tab_model, True)
-        ], columns=["Model", "Accuracy", "Precision", "Recall", "AUC"])
-        st.table(metrics_df.set_index("Model"))
-
-        # ROC Curve
-        st.subheader("ROC Curve Comparison")
-        fig_roc, ax_roc = plt.subplots()
-        for name, m, is_tab in [("CatBoost", cat_model, False), ("TabNet", tab_model, True)]:
-            p = m.predict_proba(x_test_scaled.values if is_tab else x_test_scaled)[:, 1]
-            fpr, tpr, _ = roc_curve(y_test, p)
-            ax_roc.plot(fpr, tpr, label=f"{name} (AUC: {roc_auc_score(y_test, p):.2f})")
-        ax_roc.plot([0,1],[0,1], 'k--')
-        st.pyplot(fig_roc)
-
-        # DCA
-        st.subheader("Decision Curve Analysis")
-        thresh = np.linspace(0.01, 0.99, 50)
-        p_cat = cat_model.predict_proba(x_test_scaled)[:, 1]
-        net_benefit = []
-        for t in thresh:
-            tp = np.sum((p_cat >= t) & (y_test == 1))
-            fp = np.sum((p_cat >= t) & (y_test == 0))
-            net_benefit.append((tp / len(y_test)) - (fp / len(y_test)) * (t / (1 - t)))
+        input_scaled = input_data.copy()
+        input_scaled[COLUMNS_TO_SCALE] = scaler.transform(input_data[COLUMNS_TO_SCALE])
         
-        fig_dca, ax_dca = plt.subplots()
-        ax_dca.plot(thresh, net_benefit, label='CatBoost Model')
-        ax_dca.axhline(0, color='black', lw=1)
-        st.pyplot(fig_dca)
-
-    # --- TAB 3: INTERACTIVE PREDICTION & SHAP ---
-    with tab3:
-        st.header("Real-Time Prediction")
+    with col_res:
+        prob = cat_model.predict_proba(input_scaled)[0,1]
+        risk_status = "DEFICIENT" if prob > OPTIMAL_THRESHOLD else "NON-DEFICIENT"
         
-        # Sidebar for User Inputs
-        st.sidebar.header("User Settings")
-        u_input = {}
-        for c in columns_to_scale:
-            u_input[c] = st.sidebar.number_input(f"{c}", value=float(df[c].median()))
+        st.metric("Predicted Probability", f"{prob*100:.1f}%", delta=risk_status, delta_color="inverse" if risk_status=="DEFICIENT" else "normal")
         
-        # Simple One-Hot selection for sidebar
-        u_sex = st.sidebar.selectbox("Sex", ["Male", "Female"])
-        
-        # Construct prediction row
-        row = pd.DataFrame(0, index=[0], columns=X_full.columns)
-        for c in columns_to_scale: row.loc[0, c] = u_input[c]
-        if u_sex == "Male": row.loc[0, 'sex_Male'] = 1
-        
-        # Scale and Predict
-        row_scaled = row.copy()
-        row_scaled[columns_to_scale] = scaler.transform(row[columns_to_scale])
-        
-        prob = cat_model.predict_proba(row_scaled)[0, 1]
-        st.metric("Deficiency Risk", f"{prob:.2%}")
-        if prob > OPTIMAL_THRESHOLD: st.error("High Risk")
-        else: st.success("Low Risk")
-
-        # SHAP
-        st.divider()
-        st.subheader("Feature Explanation (SHAP)")
+        st.subheader("Global Feature Importance (SHAP)")
         explainer = shap.TreeExplainer(cat_model)
-        shap_values = explainer.shap_values(row_scaled)
-        
-        fig_shap = plt.figure(figsize=(10, 3))
-        shap.force_plot(explainer.expected_value, shap_values[0, :], row.iloc[0, :], matplotlib=True, show=False)
-        st.pyplot(plt.gcf())
-
-if __name__ == "__main__":
-    main()
+        shap_values = explainer.shap_values(x_test_scaled)
+        fig, ax = plt.subplots()
+        shap.summary_plot(shap_values, x_test_scaled, plot_type="bar", show=False)
+        st.pyplot(fig)
