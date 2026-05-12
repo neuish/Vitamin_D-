@@ -78,8 +78,8 @@ def train_models(_xt, _yt, _xv, _yv):
 cat_m, xgb_m, lr_m, tab_m = train_models(x_train_sc, y_train, x_test_sc, y_test)
 
 st.set_page_config(page_title="Vitamin D Prediction Full Analysis", layout="wide")
-st.title("🎓 Vitamin D Deficiency: Comprehensive Analysis Dashboard")
-tab_eda, tab_eval, tab_clinical = st.tabs(["📊 Exploratory Data Analysis", "🧪 Model Performance", "🔮 Predictive Diagnostic"])
+st.title("Vitamin D Deficiency: Comprehensive Analysis Dashboard")
+tab_eda, tab_eval, tab_clinical = st.tabs(["Exploratory Data Analysis", "Model Performance Analysis", "Predictive Diagnostic Analysis"])
 
 with tab_eda:
     st.header("Epidemiological Insights")
@@ -125,7 +125,7 @@ with tab_eval:
             ax.plot(fpr, tpr, label=f"{name}")
         ax.plot([0,1],[0,1],'k--'); ax.legend(); st.pyplot(fig); plt.close()
     with ev2:
-        st.subheader("Decision Curve Analysis (Clinical Utility)")
+         st.subheader("Decision Curve Analysis (Clinical Utility)")
         thresholds = np.linspace(0.01, 0.99, 100)
         nb_lr = decision_curve(y_test, y_prob_lr, thresholds)
         nb_xgb = decision_curve(y_test, y_prob_xgb, thresholds)
