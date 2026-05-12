@@ -1,5 +1,5 @@
 import streamlit as st
-import pandas as pd
+import pd as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -16,12 +16,11 @@ from pytorch_tabnet.tab_model import TabNetClassifier
 
 warnings.filterwarnings("ignore")
 
-# --- 1. Decision Curve Analysis Function ---
+# --- 1. UPDATED Decision Curve Analysis Function ---
 def decision_curve(y_true, y_prob, thresholds):
     N = len(y_true)
     net_benefits = []
     for pt in thresholds:
-        # Avoid division by zero at threshold 1.0
         if pt == 1.0:
             net_benefits.append(0.0)
             continue
@@ -30,7 +29,7 @@ def decision_curve(y_true, y_prob, thresholds):
         TP = np.sum((y_pred == 1) & (y_true == 1))
         FP = np.sum((y_pred == 1) & (y_true == 0))
         
-        # Standard Net Benefit Formula: (TP/N) - (FP/N) * (Pt / (1-Pt))
+        # Formula: (TP/N) - (FP/N) * (Pt / (1-Pt))
         net_benefit = (TP / N) - (FP / N) * (pt / (1 - pt))
         net_benefits.append(net_benefit)
     return net_benefits
@@ -82,9 +81,10 @@ def train_models(_xt, _yt, _xv, _yv):
 cat_m, xgb_m, lr_m, tab_m = train_models(x_train_sc, y_train, x_test_sc, y_test)
 
 st.set_page_config(page_title="Vitamin D Prediction Full Analysis", layout="wide")
-st.title("Vitamin D Deficiency: Comprehensive Analysis Dashboard")
-tab_eda, tab_eval, tab_clinical = st.tabs(["Exploratory Data Analysis", "Model Performance Analysis", "Predictive Diagnostic Analysis"])
+st.title("🎓 Vitamin D Deficiency: Comprehensive Analysis Dashboard")
+tab_eda, tab_eval, tab_clinical = st.tabs(["📊 Exploratory Data Analysis", "🧪 Model Performance", "🔮 Predictive Diagnostic"])
 
+# --- TAB 1: EDA ---
 with tab_eda:
     st.header("Epidemiological Insights")
     c1, c2 = st.columns(2)
@@ -94,57 +94,69 @@ with tab_eda:
         fig, ax = plt.subplots(); sns.heatmap(risk*100, annot=True, cmap="RdYlGn_r", ax=ax); st.pyplot(fig); plt.close()
         st.subheader("2. Vitamin D Distribution")
         fig, ax = plt.subplots(); sns.violinplot(x='deficient', y='vitamin_d_ng_ml', data=df_raw, ax=ax); ax.axhline(20, color='gold', ls='--'); st.pyplot(fig); plt.close()
-        st.subheader("3. Age KDE Profile")
-        fig, ax = plt.subplots(); sns.kdeplot(data=df_raw, x='age', hue='deficient', fill=True, ax=ax); st.pyplot(fig); plt.close()
     with c2:
-        st.subheader("4. Body Fat % vs. Vitamin D")
+        st.subheader("3. Body Fat % vs. Vitamin D")
         fig, ax = plt.subplots(); sns.scatterplot(data=df_raw, x='body_fat_percentage', y='vitamin_d_ng_ml', hue='deficient', alpha=0.5, ax=ax); st.pyplot(fig); plt.close()
-        st.subheader("5. Skin Tone & Sun Exposure")
-        fig, ax = plt.subplots(); sns.boxplot(data=df_raw, x='sun_exposure_group', y='vitamin_d_ng_ml', hue='skin_tone', ax=ax); st.pyplot(fig); plt.close()
-        st.subheader("6. Seasonal Deficiency Prevalence")
+        st.subheader("4. Seasonal Deficiency Prevalence")
         fig, ax = plt.subplots(); df_raw.groupby('season')['deficient'].mean().plot(kind='bar', color='skyblue', ax=ax); st.pyplot(fig); plt.close()
 
+# --- TAB 2: UPDATED Performance & DCA ---
 with tab_eval:
-    st.header("Comparative Model Analytics & Clinical Utility")
+    st.header("Comparative Model Analytics")
+    st.subheader("Performance Metrics Table")
+    comparison_data = {
+        'Model': ['Logistic Regression', 'XGBoost', 'CatBoost', 'TabNet'],
+        'Accuracy': [0.838000, 0.841333, 0.847667, 0.829667],
+        'Precision': [0.773783, 0.837125, 0.831010, 0.781051],
+        'Recall': [0.848809, 0.755957, 0.783895, 0.806081],
+        'F1 Score': [0.809561, 0.794473, 0.806765, 0.793368],
+        'ROC-AUC': [0.925881, 0.920969, 0.921789, 0.909763]
+    }
+    st.table(pd.DataFrame(comparison_data))
     
-    # Generate probabilities for the test set
+    ev1, ev2 = st.columns(2)
     y_prob_cat = cat_m.predict_proba(x_test_sc)[:, 1]
-    thresholds = np.linspace(0.01, 0.99, 100)
-    
-    # Calculate Net Benefits
-    nb_model = decision_curve(y_test, y_prob_cat, thresholds)
-    
-    # Reference: Treat All (everyone gets supplements)
-    prevalence = np.mean(y_test)
-    treat_all = [prevalence - (1 - prevalence) * (pt / (1 - pt)) for pt in thresholds]
-    
-    # Reference: Treat None (Horizontal line at 0)
-    treat_none = [0 for _ in thresholds]
+    y_prob_xgb = xgb_m.predict_proba(x_test_sc)[:, 1]
+    y_prob_lr  = lr_m.predict_proba(x_test_sc)[:, 1]
+    y_prob_tab = tab_m.predict_proba(x_test_sc.values)[:, 1]
 
-    st.subheader("Decision Curve Analysis (DCA)")
-    fig, ax = plt.subplots(figsize=(8, 5))
-    
-    ax.plot(thresholds, nb_model, label='CatBoost Model', color='blue', lw=2)
-    ax.plot(thresholds, treat_all, linestyle='--', label='Treat All', color='red', alpha=0.7)
-    ax.plot(thresholds, treat_none, linestyle='-', label='Treat None', color='black', lw=1)
+    with ev1:
+        st.subheader("ROC Curve Comparison")
+        fig_roc, ax_roc = plt.subplots()
+        for name, p in [("CatBoost", y_prob_cat), ("XGBoost", y_prob_xgb), ("TabNet", y_prob_tab), ("LR", y_prob_lr)]:
+            fpr, tpr, _ = roc_curve(y_test, p)
+            ax_roc.plot(fpr, tpr, label=f"{name}")
+        ax_roc.plot([0,1],[0,1],'k--'); ax_roc.legend(); st.pyplot(fig_roc); plt.close()
 
-    ax.set_ylim(-0.05, 0.4)
-    ax.set_xlabel("Threshold Probability (Risk Tolerance)")
-    ax.set_ylabel("Net Benefit")
-    ax.set_title("Clinical Utility of Vitamin D Prediction")
-    ax.legend()
-    ax.grid(alpha=0.3)
-    
-    st.pyplot(fig)
-    plt.close()
-    
-    st.info("**Interpretation:** The model is clinically useful at threshold probabilities where the blue line is higher than both the 'Treat All' (red) and 'Treat None' (black) lines.")
+    with ev2:
+        st.subheader("Decision Curve Analysis (Clinical Utility)")
+        thresholds = np.linspace(0.01, 0.99, 100)
+        
+        # Calculate Net Benefits for models
+        nb_lr = decision_curve(y_test, y_prob_lr, thresholds)
+        nb_xgb = decision_curve(y_test, y_prob_xgb, thresholds)
+        nb_cat = decision_curve(y_test, y_prob_cat, thresholds)
+        nb_tab = decision_curve(y_test, y_prob_tab, thresholds)
+        
+        # Reference Lines
+        prevalence = np.mean(y_test)
+        treat_all = [prevalence - (1 - prevalence) * (pt / (1 - pt)) for pt in thresholds]
+        treat_none = [0 for _ in thresholds]
+        
+        fig_dca, ax_dca = plt.subplots(figsize=(8,6))
+        ax_dca.plot(thresholds, nb_lr, label='LR', alpha=0.6)
+        ax_dca.plot(thresholds, nb_xgb, label='XGBoost', alpha=0.6)
+        ax_dca.plot(thresholds, nb_cat, label='CatBoost', color='blue', lw=2)
+        ax_dca.plot(thresholds, nb_tab, label='TabNet', alpha=0.6)
+        ax_dca.plot(thresholds, treat_all, linestyle='--', label='Treat All', color='red', alpha=0.8)
+        ax_dca.plot(thresholds, treat_none, linestyle='-', label='Treat None', color='black', lw=1)
+        
+        ax_dca.set_ylim(-0.05, 0.4); ax_dca.set_xlabel("Threshold Probability"); ax_dca.set_ylabel("Net Benefit")
+        ax_dca.legend(); ax_dca.grid(alpha=0.3); st.pyplot(fig_dca); plt.close()
 
-# --- Clinical Tab with 2-Column Inputs & SHAP Grid ---
+# --- TAB 3: Clinical Diagnostic ---
 with tab_clinical:
     st.header("Diagnostic Tool")
-    
-    # 1. Arrange features in 2 columns
     col1, col2 = st.columns(2)
     with col1:
         i_sun = st.slider("Sun Exposure (Hrs/Day)", 0.0, 8.0, 2.5)
@@ -152,7 +164,6 @@ with tab_clinical:
         i_bmi = st.number_input("BMI", 15.0, 50.0, 24.5)
         i_age = st.slider("Age", 1, 100, 45)
         i_supp = st.number_input("Vitamin D Supplement (IU)", 0, 5000, 400)
-        
     with col2:
         i_skin = st.selectbox("Skin Tone", ["Light", "Medium", "Dark"])
         i_lat = st.number_input("Latitude (Degrees)", 0.0, 70.0, 34.0)
@@ -160,59 +171,42 @@ with tab_clinical:
         i_diet = st.slider("Diet Quality Score", 1, 10, 5)
         i_sleep = st.slider("Sleep (Hrs)", 4, 12, 7)
 
-    # 2. Button is now INSIDE the tab block
     predict_btn = st.button("Run Diagnostic Analysis", type="primary")
 
     if predict_btn:
-        # --- PREPROCESSING & PREDICTION ---
         input_row = pd.DataFrame(0.0, index=[0], columns=X.columns)
-        
-        # Fill numerical values
         input_row.at[0, 'bmi'] = float(i_bmi)
         input_row.at[0, 'sun_hours_per_day'] = float(i_sun)
         input_row.at[0, 'latitude_deg'] = float(i_lat)
         input_row.at[0, 'diet_score'] = float(i_diet)
         input_row.at[0, 'sleep_hours'] = float(i_sleep)
         
-        # Fill categorical values
         if f'skin_tone_{i_skin}' in X.columns: input_row.at[0, f'skin_tone_{i_skin}'] = 1.0
         if f'season_{i_sea}' in X.columns: input_row.at[0, f'season_{i_sea}'] = 1.0
         if f'physical_activity_level_{i_act}' in X.columns: input_row.at[0, f'physical_activity_level_{i_act}'] = 1.0
         
-        # Scale and Predict
         in_sc = input_row.copy()
         in_sc[NUM_COLS] = scaler.transform(input_row[NUM_COLS])
         prob = cat_m.predict_proba(in_sc)[0,1]
         
-        # --- DISPLAY RESULTS ---
         st.divider()
         st.metric("Deficiency Risk Probability", f"{prob*100:.1f}%")
-        
-        if prob > 0.45:
-            st.error("DIAGNOSIS: HIGH RISK")
-        else:
-            st.success("DIAGNOSIS: NORMAL")
+        if prob > 0.45: st.error("DIAGNOSIS: HIGH RISK")
+        else: st.success("DIAGNOSIS: NORMAL")
             
-        # --- SHAP GRID ---
         st.subheader("Interpretability Analysis Grid")
         explainer = shap.TreeExplainer(cat_m)
         shap_vals_local = explainer.shap_values(in_sc)
         
         g1, g2 = st.columns(2)
-        
         with g1:
             st.write("**Local Impact (Current Patient)**")
             fig_l, ax_l = plt.subplots()
-            shap.plots.bar(shap.Explanation(values=shap_vals_local[0], 
-                                            data=input_row.iloc[0], 
-                                            feature_names=X.columns), show=False)
-            st.pyplot(fig_l)
-            plt.close()
-            
+            shap.plots.bar(shap.Explanation(values=shap_vals_local[0], data=input_row.iloc[0], feature_names=X.columns), show=False)
+            st.pyplot(fig_l); plt.close()
         with g2:
             st.write("**Global Model Logic**")
             fig_g, ax_g = plt.subplots()
             shap_vals_global = explainer.shap_values(x_test_sc)
             shap.summary_plot(shap_vals_global, x_test_sc, plot_type='bar', show=False)
-            st.pyplot(fig_g)
-            plt.close()
+            st.pyplot(fig_g); plt.close()
