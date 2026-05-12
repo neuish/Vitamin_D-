@@ -163,28 +163,65 @@ with tab_clinical:
         i_diet = st.slider("Diet Quality Score", 1, 10, 5)
         i_sleep = st.slider("Sleep (Hrs)", 4, 12, 7)
 
-    # 2. Standard-width button
-    predict_btn = st.button("Run Diagnostic Analysis", type="primary")
+  # 2. Standard-width button
+predict_btn = st.button("Run Diagnostic Analysis", type="primary")
 
-    # 3. Conditional Output (Triggered by Button)
-    if predict_btn:
-        # (Preprocessing and scaling logic would go here)
-        # ...
+# 3. Conditional Output (Triggered by Button)
+if predict_btn:
+    # --- PREPROCESSING & PREDICTION ---
+    # Create the input row with float 0.0 to prevent type errors
+    input_row = pd.DataFrame(0.0, index=[0], columns=X.columns)
+    
+    # Fill numerical values
+    input_row.at[0, 'bmi'] = float(i_bmi)
+    input_row.at[0, 'sun_hours_per_day'] = float(i_sun)
+    input_row.at[0, 'latitude_deg'] = float(i_lat)
+    input_row.at[0, 'diet_score'] = float(i_diet)
+    input_row.at[0, 'sleep_hours'] = float(i_sleep)
+    
+    # Fill categorical values (Skin Tone, Season, Activity)
+    if f'skin_tone_{i_skin}' in X.columns: input_row.at[0, f'skin_tone_{i_skin}'] = 1.0
+    if f'season_{i_sea}' in X.columns: input_row.at[0, f'season_{i_sea}'] = 1.0
+    if f'physical_activity_level_{i_act}' in X.columns: input_row.at[0, f'physical_activity_level_{i_act}'] = 1.0
+    
+    # Scale the numerical columns using the previously defined 'scaler'
+    in_sc = input_row.copy()
+    in_sc[NUM_COLS] = scaler.transform(input_row[NUM_COLS])
+    
+    # Now define 'prob' by running the model
+    prob = cat_m.predict_proba(in_sc)[0, 1]
+
+    # --- DISPLAY RESULTS ---
+    st.divider()
+    st.metric("Deficiency Risk Probability", f"{prob*100:.1f}%")
+    
+    if prob > 0.45:
+        st.error("DIAGNOSIS: HIGH RISK OF DEFICIENCY")
+    else:
+        st.success("DIAGNOSIS: LOW RISK / NORMAL")
+    
+    # --- SHAP GRID GENERATION ---
+    st.subheader("Interpretability Analysis Grid")
+    explainer = shap.TreeExplainer(cat_m)
+    shap_vals_local = explainer.shap_values(in_sc)
+    
+    g1, g2 = st.columns(2)
+    
+    with g1:
+        st.write("**Local Impact (Current Patient)**")
+        fig_l, ax_l = plt.subplots()
+        # Bar plot for this specific patient
+        shap.plots.bar(shap.Explanation(values=shap_vals_local[0], 
+                                        data=input_row.iloc[0], 
+                                        feature_names=X.columns), show=False)
+        st.pyplot(fig_l)
+        plt.close()
         
-        # Display Probability Metric
-        st.divider()
-        st.metric("Deficiency Risk Probability", f"{prob*100:.1f}%")
-        
-        # 4. Display SHAP in a 2-column grid below the result
-        st.subheader("Interpretability Analysis Grid")
-        g1, g2 = st.columns(2)
-        
-        with g1:
-            st.write("**Local Impact (Current Patient)**")
-            # Local SHAP Plot
-            st.pyplot(fig_local)
-            
-        with g2:
-            st.write("**Global Model Logic**")
-            # Global SHAP Plot
-            st.pyplot(fig_global)
+    with g2:
+        st.write("**Global Model Logic**")
+        fig_g, ax_g = plt.subplots()
+        # Summary plot using the test set to show general importance
+        shap_vals_global = explainer.shap_values(x_test_sc)
+        shap.summary_plot(shap_vals_global, x_test_sc, plot_type='bar', show=False)
+        st.pyplot(fig_g)
+        plt.close()
