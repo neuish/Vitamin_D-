@@ -1,4 +1,3 @@
-%%writefile app.py
 # --- Streamlit Setup & Data Preparation ---
 import streamlit as st
 import pandas as pd
