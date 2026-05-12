@@ -78,8 +78,8 @@ def train_models(_xt, _yt, _xv, _yv):
 cat_m, xgb_m, lr_m, tab_m = train_models(x_train_sc, y_train, x_test_sc, y_test)
 
 st.set_page_config(page_title="Vitamin D Prediction Full Analysis", layout="wide")
-st.title("🎓 Vitamin D Deficiency: Comprehensive Analysis Dashboard")
-tab_eda, tab_eval, tab_clinical = st.tabs(["📊 Exploratory Data Analysis", "🧪 Model Performance", "🔮 Predictive Diagnostic"])
+st.title(" Vitamin D Deficiency: Comprehensive Analysis Dashboard")
+tab_eda, tab_eval, tab_clinical = st.tabs(["Exploratory Data Analysis", "Model Performance and Analysis", "Predictive Diagnostic Analysis"])
 
 with tab_eda:
     st.header("Epidemiological Insights")
