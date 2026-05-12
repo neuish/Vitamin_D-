@@ -21,13 +21,17 @@ def decision_curve(y_true, y_prob, thresholds):
     N = len(y_true)
     net_benefits = []
     for pt in thresholds:
+        # Avoid division by zero at threshold 1.0
+        if pt == 1.0:
+            net_benefits.append(0.0)
+            continue
+            
         y_pred = (y_prob >= pt).astype(int)
         TP = np.sum((y_pred == 1) & (y_true == 1))
         FP = np.sum((y_pred == 1) & (y_true == 0))
-        if (1 - pt) == 0:
-            net_benefit = TP / N
-        else:
-            net_benefit = (TP / N) - (FP / N) * (pt / (1 - pt))
+        
+        # Standard Net Benefit Formula: (TP/N) - (FP/N) * (Pt / (1-Pt))
+        net_benefit = (TP / N) - (FP / N) * (pt / (1 - pt))
         net_benefits.append(net_benefit)
     return net_benefits
 
@@ -101,53 +105,40 @@ with tab_eda:
         fig, ax = plt.subplots(); df_raw.groupby('season')['deficient'].mean().plot(kind='bar', color='skyblue', ax=ax); st.pyplot(fig); plt.close()
 
 with tab_eval:
-    st.header("Comparative Model Analytics")
-    st.subheader("Performance Metrics Table")
-    comparison_data = {
-        'Model': ['Logistic Regression', 'XGBoost', 'CatBoost', 'TabNet'],
-        'Accuracy': [0.838000, 0.841333, 0.847667, 0.829667],
-        'Precision': [0.773783, 0.837125, 0.831010, 0.781051],
-        'Recall': [0.848809, 0.755957, 0.783895, 0.806081],
-        'F1 Score': [0.809561, 0.794473, 0.806765, 0.793368],
-        'ROC-AUC': [0.925881, 0.920969, 0.921789, 0.909763]
-    }
-    st.table(pd.DataFrame(comparison_data))
-    ev1, ev2 = st.columns(2)
+    st.header("Comparative Model Analytics & Clinical Utility")
+    
+    # Generate probabilities for the test set
     y_prob_cat = cat_m.predict_proba(x_test_sc)[:, 1]
-    y_prob_xgb = xgb_m.predict_proba(x_test_sc)[:, 1]
-    y_prob_lr  = lr_m.predict_proba(x_test_sc)[:, 1]
-    y_prob_tab = tab_m.predict_proba(x_test_sc.values)[:, 1]
-    with ev1:
-        st.subheader("ROC Curve Comparison")
-        fig, ax = plt.subplots()
-        for name, p in [("CatBoost", y_prob_cat), ("XGBoost", y_prob_xgb), ("TabNet", y_prob_tab), ("LR", y_prob_lr)]:
-            fpr, tpr, _ = roc_curve(y_test, p)
-            ax.plot(fpr, tpr, label=f"{name}")
-        ax.plot([0,1],[0,1],'k--'); ax.legend(); st.pyplot(fig); plt.close()
-    with ev2:
-         st.subheader("Decision Curve Analysis (Clinical Utility)")
-        thresholds = np.linspace(0.01, 0.99, 100)
-        nb_lr = decision_curve(y_test, y_prob_lr, thresholds)
-        nb_xgb = decision_curve(y_test, y_prob_xgb, thresholds)
-        nb_cat = decision_curve(y_test, y_prob_cat, thresholds)
-        nb_tab = decision_curve(y_test, y_prob_tab, thresholds)
-        prevalence = np.mean(y_test)
+    thresholds = np.linspace(0.01, 0.99, 100)
+    
+    # Calculate Net Benefits
+    nb_model = decision_curve(y_test, y_prob_cat, thresholds)
+    
+    # Reference: Treat All (everyone gets supplements)
+    prevalence = np.mean(y_test)
+    treat_all = [prevalence - (1 - prevalence) * (pt / (1 - pt)) for pt in thresholds]
+    
+    # Reference: Treat None (Horizontal line at 0)
+    treat_none = [0 for _ in thresholds]
 
- # Calculate treat_all with robustness for pt=1
-        treat_all = np.array([
-            prevalence - (1 - prevalence) * (p / (1 - p)) if p < 1 else prevalence
-            for p in thresholds
-        ])
-        treat_none = [0 for _ in thresholds]
-        fig, ax = plt.subplots(figsize=(8,6))
-        ax.plot(thresholds, nb_lr, label='LR')
-        ax.plot(thresholds, nb_xgb, label='XGBoost')
-        ax.plot(thresholds, nb_cat, label='CatBoost', color='blue', lw=2)
-        ax.plot(thresholds, nb_tab, label='TabNet')
-        ax.plot(thresholds, treat_all, linestyle='--', label='Treat All', color='red')
-        ax.plot(thresholds, treat_none, linestyle='--', label='Treat None', color='black')
-        ax.set_ylim(-0.05, 0.4); ax.set_xlabel("Threshold Probability"); ax.set_ylabel("Net Benefit"); ax.legend(); ax.grid(); st.pyplot(fig); plt.close()
-        
+    st.subheader("Decision Curve Analysis (DCA)")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    
+    ax.plot(thresholds, nb_model, label='CatBoost Model', color='blue', lw=2)
+    ax.plot(thresholds, treat_all, linestyle='--', label='Treat All', color='red', alpha=0.7)
+    ax.plot(thresholds, treat_none, linestyle='-', label='Treat None', color='black', lw=1)
+
+    ax.set_ylim(-0.05, 0.4)
+    ax.set_xlabel("Threshold Probability (Risk Tolerance)")
+    ax.set_ylabel("Net Benefit")
+    ax.set_title("Clinical Utility of Vitamin D Prediction")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    
+    st.pyplot(fig)
+    plt.close()
+    
+    st.info("**Interpretation:** The model is clinically useful at threshold probabilities where the blue line is higher than both the 'Treat All' (red) and 'Treat None' (black) lines.")
 
 # --- Clinical Tab with 2-Column Inputs & SHAP Grid ---
 with tab_clinical:
