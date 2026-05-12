@@ -188,24 +188,20 @@ if predict_btn:
     in_sc = input_row.copy()
     in_sc[NUM_COLS] = scaler.transform(input_row[NUM_COLS])
     
-    # Now define 'prob' by running the model
-    prob = cat_m.predict_proba(in_sc)[0, 1]
+   # 2. MOVE THE BUTTON INSIDE THE TAB BLOCK
+    # By indenting this, it only appears when 'Predictive Diagnostic' is active
+    predict_btn = st.button("Run Diagnostic Analysis", type="primary")
 
-    # --- DISPLAY RESULTS ---
-    st.divider()
-    st.metric("Deficiency Risk Probability", f"{prob*100:.1f}%")
-    
-    if prob > 0.45:
-        st.error("DIAGNOSIS: HIGH RISK OF DEFICIENCY")
-    else:
-        st.success("DIAGNOSIS: LOW RISK / NORMAL")
-    
-    # --- SHAP GRID GENERATION ---
-    st.subheader("Interpretability Analysis Grid")
-    explainer = shap.TreeExplainer(cat_m)
-    shap_vals_local = explainer.shap_values(in_sc)
-    
-    g1, g2 = st.columns(2)
+    if predict_btn:
+        # 3. All calculation and display code must also be indented here
+        prob = cat_m.predict_proba(in_sc)[0,1]
+        
+        st.divider()
+        st.metric("Deficiency Risk Probability", f"{prob*100:.1f}%")
+        
+        # 4. SHAP Grid (Indented under the button trigger)
+        st.subheader("Interpretability Analysis Grid")
+        g1, g2 = st.columns(2)
     
     with g1:
         st.write("**Local Impact (Current Patient)**")
