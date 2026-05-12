@@ -80,6 +80,9 @@ df['sun_exposure_group'] = pd.cut(
 # Create quartiles for sun_hours_per_day (from Q10JqJUIjSiE)
 df['sun_hours_quartile'] = pd.qcut(df['sun_hours_per_day'], q=4, labels=['Q1 (Low)', 'Q2', 'Q3', 'Q4 (High)'])
 
+vitamin_d_ng_ml_series = df['vitamin_d_ng_ml'].copy()
+
+
 # Drop 'vitamin_d_ng_ml' (from GXUyx7xsVy55)
 df = df.drop('vitamin_d_ng_ml', axis=1)
 
@@ -270,6 +273,7 @@ def run_streamlit_app():
 
         # Create a copy of df for visualizations where 'deficient' needs to be categorical
         df_plot = df.copy()
+        df_plot['vitamin_d_ng_ml'] = vitamin_d_ng_ml_series  # re-attach for viz
         df_plot['deficient'] = df_plot['deficient'].astype(str)
 
         # Visualization 1: Vitamin D Deficiency Risk Surface
@@ -278,6 +282,7 @@ def run_streamlit_app():
         df_viz1['supplement_tier'] = pd.cut(df_viz1['vitamin_d_supplement_iu'], bins=[-1, 0, 400, 800, 1500, 2001], labels=['None (0 IU)', 'Low (1-400 IU)', 'Medium (401-800 IU)', 'High (801-1500 IU)', 'Very High (>1500 IU)'], right=False)
         df_viz1['sun_hours_bins'] = pd.cut(df_viz1['sun_hours_per_day'], bins=np.arange(0, 8.5, 0.5), right=False)
         risk_surface = df_viz1.groupby(['sun_hours_bins', 'supplement_tier'])['deficient'].mean().unstack()
+        risk_surface.index = risk_surface.index.astype(str)  
         overall_deficiency = df_viz1['deficient'].mean()
         fig1, ax1 = plt.subplots(figsize=(14, 10))
         sns.heatmap(risk_surface * 100, annot=True, fmt='.1f', cmap='RdYlGn_r', center=overall_deficiency * 100, linewidths=.5, linecolor='lightgrey', cbar_kws={'label': 'Deficiency Rate (%)'}, ax=ax1)
@@ -369,6 +374,7 @@ def run_streamlit_app():
         df_viz7['sun_hours_quartile'] = pd.qcut(df_viz7['sun_hours_per_day'], q=4, labels=['Q1 (Low)', 'Q2', 'Q3', 'Q4 (High)'])
         median_vd_heatmap = df_viz7.groupby(['supplement_tier', 'sun_hours_quartile'])['vitamin_d_ng_ml'].median().unstack()
         fig7, ax7 = plt.subplots(figsize=(10, 8))
+        median_vd_heatmap.columns = median_vd_heatmap.columns.astype(str)
         sns.heatmap(median_vd_heatmap, annot=True, cmap='YlGnBu', fmt='.1f', linewidths=.5, linecolor='lightgrey', ax=ax7)
         ax7.set_title('Median Vitamin D (ng/mL) by Supplementation Tier and Sun Hours Quartile', fontsize=16)
         ax7.set_xlabel('Sun Hours Per Day Quartile', fontsize=12)
