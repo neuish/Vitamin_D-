@@ -1,3 +1,4 @@
+%%writefile app.py
 # --- Streamlit Setup & Data Preparation --- #
 import streamlit as st
 import pandas as pd
@@ -82,9 +83,6 @@ df['sun_hours_quartile'] = pd.qcut(df['sun_hours_per_day'], q=4, labels=['Q1 (Lo
 
 # Drop 'vitamin_d_ng_ml' (from GXUyx7xsVy55)
 df = df.drop('vitamin_d_ng_ml', axis=1)
-
-# Convert 'deficient' to object type for some operations, then back to int (from 6ab3e379, then back to int later)
-df['deficient'] = df['deficient'].astype('object')
 
 # One-hot encode categorical columns (from ffca819f)
 categorical_cols_to_encode = ['sex', 'skin_tone', 'clothing_coverage', 'season', 'physical_activity_level', 'diet_type', 'socioeconomic_status', 'education_level', 'smoking_status', 'alcohol_use', 'urban_rural']
@@ -233,7 +231,7 @@ y_test_final['Predicted'] = y_test_final.Predicted_Prob.map(lambda x: 1 if x > O
 # --- SHAP Explainer (from ee8e0578) ---
 explainer_cat = shap.TreeExplainer(cat_model)
 
-# --- Global variables for Streamlit App --- #
+# --- Global variables for Streamlit App ---
 x_full = df_encoded.drop(columns=['deficient', 'supplement_tier', 'sun_hours_bins', 'sun_exposure_group', 'sun_hours_quartile']).copy()
 prediction_model = cat_model
 selected_features_for_prediction = x_train.columns
@@ -483,27 +481,29 @@ def run_streamlit_app():
             input_df.loc[0, col_name] = input_data[col_name]
 
         for col, options in categorical_cols_original.items():
+            selected_option = st.sidebar.selectbox(f"Select {col.replace('_', ' ').title()}", options, key=f"cat_{col}")
             for option in options:
                 col_name_ohe = f"{col}_{option}"
                 if col_name_ohe in x_full.columns:
-                    input_df.loc[0, col_name_ohe] = 1 if input_data[col] == option else 0
-                elif input_data[col] == option and option == options[0]:
-                    pass
+                    input_df.loc[0, col_name_ohe] = 1 if selected_option == option else 0
+                # Handle the case where 'drop_first=True' removed the first category
+                elif selected_option == option and option == options[0]:
+                    pass # The base category is represented by all zeros in dummy variables
 
         for label in age_labels_raw:
-            if label != age_labels_raw[0]:
+            if label != age_labels_raw[0]: # Skip the first label if drop_first=True was used for age groups
                 col_name_ohe = f"Age_Group_{label}"
                 if col_name_ohe in x_full.columns:
                     input_df.loc[0, col_name_ohe] = 1 if age_group_raw == label else 0
-            elif age_group_raw == label and label == age_labels_raw[0]:
+            elif age_group_raw == label and label == age_labels_raw[0]: # Handle the base category for age group
                 pass
 
         for label in delay_labels_raw:
-            if label != delay_labels_raw[0]:
+            if label != delay_labels_raw[0]: # Skip the first label if drop_first=True was used for vitamin D groups
                 col_name_ohe = f"VitaminD_Supplement_Group_{label}"
                 if col_name_ohe in x_full.columns:
                     input_df.loc[0, col_name_ohe] = 1 if vitamin_d_group_raw == label else 0
-            elif vitamin_d_group_raw == label and label == delay_labels_raw[0]:
+            elif vitamin_d_group_raw == label and label == delay_labels_raw[0]: # Handle the base category for vitamin D group
                 pass
 
         input_df = input_df[x_full.columns]
