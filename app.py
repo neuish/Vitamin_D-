@@ -165,7 +165,7 @@ with tab_clinical:
         i_sleep = st.slider("Average Sleep (Hrs)", 4, 12, 7)
 
     # Center-aligned Prediction Button
-    predict_btn = st.button("Run Diagnostic Analysis", type="primary", use_container_width=True)
+   predict_btn = st.button("Run Diagnostic Analysis", type="primary")
     
     st.divider()
 
