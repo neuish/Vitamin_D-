@@ -1,4 +1,4 @@
-# --- Streamlit Setup & Data Preparation --- #
+# --- Streamlit Setup & Data Preparation ---
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -114,7 +114,7 @@ df_encoded = df_encoded.drop(columns=['age', 'vitamin_d_supplement_iu'])
 # Convert 'deficient' back to int before train-test split (needed for model training)
 df_encoded['deficient'] = df_encoded['deficient'].astype(int)
 
-# --- Train-Test Split & Scaling --- #
+# --- Train-Test Split & Scaling ---
 columns_to_scale = [
     'bmi', 'sun_hours_per_day', 'screen_time_hours',
     'calcium_intake_mg', 'latitude_deg', 'outdoor_activity_minutes',
@@ -257,7 +257,7 @@ def decision_curve(y_true, y_prob, thresholds):
 
     return net_benefits
 
-# --- Streamlit App Definition --- #
+# --- Streamlit App Definition ---
 def run_streamlit_app():
     st.set_page_config(layout="wide")
 
@@ -267,6 +267,10 @@ def run_streamlit_app():
 
     with tab1:
         st.header("Key Visualizations")
+
+        # Create a copy of df for visualizations where 'deficient' needs to be categorical
+        df_plot = df.copy()
+        df_plot['deficient'] = df_plot['deficient'].astype(str)
 
         # Visualization 1: Vitamin D Deficiency Risk Surface
         st.subheader('Vitamin D Deficiency Risk Surface: Sun Hours vs. Supplementation')
@@ -289,7 +293,7 @@ def run_streamlit_app():
         st.subheader('Vitamin D Distribution by Deficiency Status')
         fig2, ax2 = plt.subplots(figsize=(10, 6))
         # 'vitamin_d_ng_ml' is dropped from df_encoded, but df still has it for visualization
-        sns.violinplot(x='deficient', y='vitamin_d_ng_ml', data=df, palette={0: 'teal', 1: 'coral'}, hue='deficient', legend=False, ax=ax2)
+        sns.violinplot(x='deficient', y='vitamin_d_ng_ml', data=df_plot, palette={0: 'teal', 1: 'coral'}, hue='deficient', legend=False, ax=ax2)
         ax2.axhline(20, color='gold', linestyle='--', label='Deficiency Threshold')
         ax2.set_title('Vitamin D Distribution by Deficiency Status', fontsize=16)
         ax2.set_xlabel('Deficient (0: No, 1: Yes)', fontsize=12)
@@ -303,7 +307,7 @@ def run_streamlit_app():
         # Visualization 3: Age Distribution for Deficient vs. Non-Deficient
         st.subheader('Age Distribution for Vitamin D Deficient vs. Non-Deficient')
         fig3, ax3 = plt.subplots(figsize=(10, 6))
-        sns.histplot(data=df, x='age', hue='deficient', kde=True, palette={0: 'teal', 1: 'coral'}, stat='density', common_norm=False, ax=ax3)
+        sns.histplot(data=df_plot, x='age', hue='deficient', kde=True, palette={0: 'teal', 1: 'coral'}, stat='density', common_norm=False, ax=ax3)
         ax3.set_title('Age Distribution for Vitamin D Deficient vs. Non-Deficient', fontsize=16)
         ax3.set_xlabel('Age', fontsize=12)
         ax3.set_ylabel('Density', fontsize=12)
@@ -314,7 +318,7 @@ def run_streamlit_app():
         # Visualization 4: Body Fat Percentage vs. Vitamin D Levels
         st.subheader('Body Fat Percentage vs. Vitamin D Levels')
         fig4, ax4 = plt.subplots(figsize=(10, 6))
-        sns.scatterplot(x='body_fat_percentage', y='vitamin_d_ng_ml', hue='deficient', data=df, palette={0: 'teal', 1: 'coral'}, alpha=0.6, ax=ax4)
+        sns.scatterplot(x='body_fat_percentage', y='vitamin_d_ng_ml', hue='deficient', data=df_plot, palette={0: 'teal', 1: 'coral'}, alpha=0.6, ax=ax4)
         ax4.axhline(20, linestyle='--', color='gold', label='Deficiency Threshold')
         ax4.set_title('Body Fat Percentage vs. Vitamin D Levels', fontsize=16)
         ax4.set_xlabel('Body Fat Percentage', fontsize=12)
@@ -345,6 +349,7 @@ def run_streamlit_app():
 
         # Visualization 6: Stacked Bar Chart of Deficiency Prevalence by Skin Tone and Season
         st.subheader('Vitamin D Deficiency Prevalence by Skin Tone and Season')
+        # This plot uses .mean(), so 'deficient' as int is fine
         deficiency_crosstab = df.groupby(['skin_tone', 'season'])['deficient'].mean().unstack()
         fig6, ax6 = plt.subplots(figsize=(12, 7))
         deficiency_crosstab.plot(kind='bar', stacked=True, cmap='viridis', ax=ax6)
